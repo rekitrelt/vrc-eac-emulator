@@ -2,10 +2,18 @@
 
 #include <plog/Log.h>
 
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
 #include "common/eos/eos_api.h"
 #include "eos_utils.h"
 
-bool initialized = false;
+namespace {
+std::atomic<bool> initialized{false};
+std::mutex initialization_mutex;
+std::condition_variable initialization_cv;
+}
 void eos::initialize(EOS_InitializeOptions const& options) {
 	typedef EOS_EResult(EOS_CALL* EOS_Initialize)(EOS_InitializeOptions const*);
 	static auto eos_initialize = reinterpret_cast<EOS_Initialize>(eos_utils::get_eos_proc_addr("EOS_Initialize"));
@@ -19,8 +27,12 @@ void eos::initialize(EOS_InitializeOptions const& options) {
 		PLOGE.printf("Failed to initialize eos: %d", status_code);
 		return;
 	}
-	PLOGI.printf("EOS has been initialized successfully: productName=%s", options.ProductName);
-	initialized = true;
+        PLOGI.printf("EOS has been initialized successfully: productName=%s", options.ProductName);
+        {
+                std::lock_guard<std::mutex> lock(initialization_mutex);
+                initialized = true;
+        }
+        initialization_cv.notify_all();
 }
 
 void eos::set_logging_callback(EOS_LogMessageFunc callback) {
@@ -70,5 +82,18 @@ EOS_EResult eos::product_user_id_to_string(EOS_ProductUserId user_id, char* out_
 }
 
 bool eos::is_eos_initialized() {
-	return initialized;
+        return initialized.load();
+}
+
+bool eos::wait_until_initialized(std::chrono::milliseconds timeout) {
+        if (initialized.load()) {
+                return true;
+        }
+
+        std::unique_lock<std::mutex> lock(initialization_mutex);
+        if (timeout.count() < 0) {
+                initialization_cv.wait(lock, []() { return initialized.load(); });
+                return initialized.load();
+        }
+        return initialization_cv.wait_for(lock, timeout, []() { return initialized.load(); });
 }

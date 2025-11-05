@@ -4,7 +4,15 @@
 #include "common/eos/eos_api.h"
 #include "eos_utils.h"
 
+#include <condition_variable>
+#include <mutex>
+
+namespace {
 EOS_HPlatform hPlatform = NULL;
+std::mutex platform_mutex;
+std::condition_variable platform_cv;
+bool platform_created = false;
+}
 void eos_platform::create_platform(EOS_Platform_Options const& options) {
 	typedef EOS_HPlatform (EOS_CALL*EOS_Platform_Create)(EOS_Platform_Options const*);
 	static auto eos_create_platform = reinterpret_cast<EOS_Platform_Create>(
@@ -14,40 +22,60 @@ void eos_platform::create_platform(EOS_Platform_Options const& options) {
 		return;
 	}
 
-	hPlatform = eos_create_platform(&options);
-	if (!hPlatform) {
-		PLOGE.printf("Failed to call EOS_Platform_Create!");
-		return;
-	}
-	PLOGI.printf("Platform Created: product_id=%s, client_id=%s", options.ProductId, options.ClientCredentials.ClientId);
+        EOS_HPlatform created_platform = eos_create_platform(&options);
+        if (!created_platform) {
+                PLOGE.printf("Failed to call EOS_Platform_Create!");
+                return;
+        }
+        {
+                std::lock_guard<std::mutex> lock(platform_mutex);
+                hPlatform = created_platform;
+                platform_created = true;
+        }
+        platform_cv.notify_all();
+        PLOGI.printf("Platform Created: product_id=%s, client_id=%s", options.ProductId, options.ClientCredentials.ClientId);
 }
 
 void eos_platform::tick() {
-	typedef void (EOS_CALL*EOS_Platform_Tick)(EOS_HPlatform);
-	static auto eos_platform_tick = reinterpret_cast<EOS_Platform_Tick>(
-		eos_utils::get_eos_proc_addr("EOS_Platform_Tick"));
-	if (!eos_platform_tick) {
-		PLOGF.printf("Could not resolve EOS_Platform_Tick");
-		return;
-	}
+        typedef void (EOS_CALL*EOS_Platform_Tick)(EOS_HPlatform);
+        static auto eos_platform_tick = reinterpret_cast<EOS_Platform_Tick>(
+                eos_utils::get_eos_proc_addr("EOS_Platform_Tick"));
+        if (!eos_platform_tick) {
+                PLOGF.printf("Could not resolve EOS_Platform_Tick");
+                return;
+        }
 
-	eos_platform_tick(hPlatform);
+        EOS_HPlatform current_platform = NULL;
+        {
+                std::lock_guard<std::mutex> lock(platform_mutex);
+                current_platform = hPlatform;
+        }
+        if (!current_platform) {
+                return;
+        }
+
+        eos_platform_tick(current_platform);
 }
 
 EOS_HConnect eos_platform::get_connect_interface() {
-	typedef EOS_HConnect (EOS_CALL*EOS_Platform_GetConnectInterface)(EOS_HPlatform);
-	static auto eos_platform_get_connect_interface = reinterpret_cast<EOS_Platform_GetConnectInterface>(
-		eos_utils::get_eos_proc_addr("EOS_Platform_GetConnectInterface"));
-	if (!eos_platform_get_connect_interface) {
-		PLOGF.printf("Could not resolve EOS_Platform_GetConnectInterface");
-		return 0;
-	}
+        typedef EOS_HConnect (EOS_CALL*EOS_Platform_GetConnectInterface)(EOS_HPlatform);
+        static auto eos_platform_get_connect_interface = reinterpret_cast<EOS_Platform_GetConnectInterface>(
+                eos_utils::get_eos_proc_addr("EOS_Platform_GetConnectInterface"));
+        if (!eos_platform_get_connect_interface) {
+                PLOGF.printf("Could not resolve EOS_Platform_GetConnectInterface");
+                return 0;
+        }
 
-	EOS_HConnect hConnect = eos_platform_get_connect_interface(hPlatform);
-	if (!hConnect) {
-		PLOGE.printf("Failed to call EOS_Platform_GetConnectInterface!");
-		return 0;
-	}
+        EOS_HPlatform current_platform = NULL;
+        {
+                std::lock_guard<std::mutex> lock(platform_mutex);
+                current_platform = hPlatform;
+        }
+        EOS_HConnect hConnect = eos_platform_get_connect_interface(current_platform);
+        if (!hConnect) {
+                PLOGE.printf("Failed to call EOS_Platform_GetConnectInterface!");
+                return 0;
+        }
 
 	return hConnect;
 }
@@ -61,9 +89,32 @@ EOS_HAntiCheatClient eos_platform::get_anticheat_client_interface() {
 		return 0;
 	}
 
-	return eos_platform_get_anticheat_client_interface(hPlatform);
+        EOS_HPlatform current_platform = NULL;
+        {
+                std::lock_guard<std::mutex> lock(platform_mutex);
+                current_platform = hPlatform;
+        }
+        if (!current_platform) {
+                return 0;
+        }
+
+        return eos_platform_get_anticheat_client_interface(current_platform);
 }
 
 bool eos_platform::is_platform_created() {
-	return hPlatform != NULL;
+        std::lock_guard<std::mutex> lock(platform_mutex);
+        return platform_created;
+}
+
+bool eos_platform::wait_until_created(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(platform_mutex);
+        if (platform_created) {
+                return true;
+        }
+        if (timeout.count() < 0) {
+                platform_cv.wait(lock, []() { return platform_created; });
+                return platform_created;
+        }
+
+        return platform_cv.wait_for(lock, timeout, []() { return platform_created; });
 }

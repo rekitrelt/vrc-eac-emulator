@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 #include <common/eos/eos_login_types.h>
 #include <common/eos/eos_platform_types.h>
 
@@ -11,7 +13,9 @@ public:
 
 	static EOS_HConnect get_connect_interface();
 
-	static EOS_HAntiCheatClient get_anticheat_client_interface();
+        static EOS_HAntiCheatClient get_anticheat_client_interface();
 
-	static bool is_platform_created();
+        static bool is_platform_created();
+
+        static bool wait_until_created(std::chrono::milliseconds timeout);
 };
