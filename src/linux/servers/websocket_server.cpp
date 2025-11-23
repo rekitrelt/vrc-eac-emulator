@@ -21,7 +21,7 @@ std::mutex send_mutex, receive_mutex;
 std::vector<std::shared_ptr<packet> > send_queued_packets, receive_queued_packets;
 
 void websocket_server::run_server(std::condition_variable& locker, int port) {
-        hv::WebSocketService service;
+	hv::WebSocketService service;
         service.onopen = [&](const WebSocketChannelPtr& channel, const HttpRequestPtr& req) {
                 PLOGD.printf("A connection established");
                 {
@@ -47,13 +47,11 @@ void websocket_server::run_server(std::condition_variable& locker, int port) {
                 channels.erase(std::remove(channels.begin(), channels.end(), channel), channels.end());
         };
 
-        server = std::make_shared<hv::WebSocketServer>(&service);
-        // Bind explicitly to all interfaces so remote clients (e.g. over a public IP)
-        // can connect instead of being limited to localhost.
-        server->setHost("0.0.0.0");
-        server->setPort(port);
-        server->setThreadNum(4);
-        server->run();
+	server = std::make_shared<hv::WebSocketServer>(&service);
+	server->setHost();
+	server->setPort(port);
+	server->setThreadNum(4);
+	server->run();
 }
 
 void websocket_server::launch(int port) {

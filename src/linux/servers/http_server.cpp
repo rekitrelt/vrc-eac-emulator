@@ -33,12 +33,10 @@ void http_server::init() {
 		return resp->String(output_json.dump());
 	});
 
-        hv::HttpServer server(&router);
-        // Bind to all interfaces to allow connections from remote Windows hosts.
-        server.setHost("0.0.0.0");
-        server.setPort(port);
-        server.setThreadNum(4);
-        server.run();
+	hv::HttpServer server(&router);
+	server.setPort(port);
+	server.setThreadNum(4);
+	server.run();
 }
 
 void http_server::run(int port) {
