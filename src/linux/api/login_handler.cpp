@@ -1,6 +1,7 @@
 #include "login_handler.h"
 
 #include <condition_variable>
+#include <chrono>
 #include <mutex>
 #include <plog/Log.h>
 
@@ -9,6 +10,7 @@
 #include "common/api/response/login_response.h"
 #include "common/eos/eos_login_types.h"
 
+#include "../eos/eos.h"
 #include "../eos/eos_connect.h"
 #include "../eos/eos_platform.h"
 
@@ -29,10 +31,31 @@ void EOS_CALL request_login_callback(const EOS_Connect_LoginCallbackInfo* data) 
 }
 
 std::shared_ptr<response> login_handler::handle(std::shared_ptr<request> request) {
-	auto request_login = std::static_pointer_cast<login_request>(request);
+        auto request_login = std::static_pointer_cast<login_request>(request);
 
-	std::string logText = "Processing Login:\n";
-	if (request_login->has_credentials) {
+        using namespace std::chrono_literals;
+        constexpr auto initialization_timeout = 10s;
+
+        auto make_error_response = []() {
+                auto response = std::make_shared<login_response>();
+                response->result_code = -1;
+                response->local_user_id = 0;
+                response->continuance_token = 0;
+                return response;
+        };
+
+        if (!eos::wait_until_initialized(initialization_timeout)) {
+                PLOGE.printf("Timed out waiting for EOS initialization before login");
+                return make_error_response();
+        }
+
+        if (!eos_platform::wait_until_created(initialization_timeout)) {
+                PLOGE.printf("Timed out waiting for EOS platform creation before login");
+                return make_error_response();
+        }
+
+        std::string logText = "Processing Login:\n";
+        if (request_login->has_credentials) {
 		logText.append(" - Credentials\n");
 		logText.append(std::format("    ApiVersion: {}\n", request_login->credentials.ApiVersion));
 		logText.append(std::format("    Type: {}\n", request_login->credentials.Type));
@@ -67,11 +90,14 @@ std::shared_ptr<response> login_handler::handle(std::shared_ptr<request> request
 		options.UserLoginInfo = &user_login_info;
 	}
 
-	vlock<std::shared_ptr<login_response>> lock;
-	EOS_HConnect connect_interface = eos_platform::get_connect_interface();
-	if (connect_interface != 0) {
-		eos_connect::login(connect_interface, options, &lock, &request_login_callback);
-	}
+        vlock<std::shared_ptr<login_response>> lock;
+        EOS_HConnect connect_interface = eos_platform::get_connect_interface();
+        if (connect_interface == 0) {
+                PLOGE.printf("Failed to acquire connect interface for login");
+                return make_error_response();
+        }
 
-	return lock.wait();
+        eos_connect::login(connect_interface, options, &lock, &request_login_callback);
+
+        return lock.wait();
 }
